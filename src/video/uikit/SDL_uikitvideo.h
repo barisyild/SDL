@@ -35,6 +35,12 @@
 
 CGRect UIKit_ComputeViewFrame(SDL_Window *window, UIScreen *screen);
 
+extern UIWindowScene *UIKit_GetActiveWindowScene(void) API_AVAILABLE(ios(13.0), tvos(13.0));
+
+#if !TARGET_OS_TV
+extern UIInterfaceOrientation UIKit_GetInterfaceOrientation(void);
+#endif
+
 #endif /* __OBJC__ */
 
 void UIKit_SuspendScreenSaver(_THIS);

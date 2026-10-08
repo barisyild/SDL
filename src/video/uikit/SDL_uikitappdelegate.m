@@ -89,7 +89,7 @@ SDL_IdleTimerDisabledChanged(void *userdata, const char *name, const char *oldVa
 /* Load a launch image using the old UILaunchImageFile-era naming rules. */
 static UIImage *SDL_LoadLaunchImageNamed(NSString *name, int screenh)
 {
-    UIInterfaceOrientation curorient = [UIApplication sharedApplication].statusBarOrientation;
+    UIInterfaceOrientation curorient = UIKit_GetInterfaceOrientation();
     UIUserInterfaceIdiom idiom = [UIDevice currentDevice].userInterfaceIdiom;
     UIImage *image = nil;
 
@@ -219,7 +219,7 @@ static UIImage *SDL_LoadLaunchImageNamed(NSString *name, int screenh)
         int screenh = (int)([UIScreen mainScreen].bounds.size.height + 0.5);
 
 #if !TARGET_OS_TV
-        UIInterfaceOrientation curorient = [UIApplication sharedApplication].statusBarOrientation;
+        UIInterfaceOrientation curorient = UIKit_GetInterfaceOrientation();
 
         /* We always want portrait-oriented size, to match UILaunchImageSize. */
         if (screenw > screenh) {
@@ -349,8 +349,15 @@ static UIImage *SDL_LoadLaunchImageNamed(NSString *name, int screenh)
 
 @end
 
+@interface SDLUIKitDelegate ()
+
+- (void)startWithScene:(id)scene;
+
+@end
+
 @implementation SDLUIKitDelegate {
     UIWindow *launchWindow;
+    BOOL started;
 }
 
 /* convenience method */
@@ -410,7 +417,7 @@ static UIImage *SDL_LoadLaunchImageNamed(NSString *name, int screenh)
     /* exit(exit_status); */
 }
 
-- (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions
+- (void)showLaunchScreen:(id)scene
 {
     NSBundle *bundle = [NSBundle mainBundle];
 
@@ -448,7 +455,15 @@ static UIImage *SDL_LoadLaunchImageNamed(NSString *name, int screenh)
     }
 
     if (vc.view) {
-        launchWindow = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+        launchWindow = nil;
+        if (scene) {
+            if (@available(iOS 13.0, tvOS 13.0, *)) {
+                launchWindow = [[UIWindow alloc] initWithWindowScene:(UIWindowScene *)scene];
+            }
+        }
+        if (!launchWindow) {
+            launchWindow = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+        }
 
         /* We don't want the launch window immediately hidden when a real SDL
          * window is shown - we fade it out ourselves when we're ready. */
@@ -461,6 +476,24 @@ static UIImage *SDL_LoadLaunchImageNamed(NSString *name, int screenh)
         launchWindow.rootViewController = vc;
     }
 #endif
+}
+
+- (void)startWithScene:(id)scene
+{
+    if (started) {
+        return;
+    }
+    started = YES;
+
+    [self showLaunchScreen:scene];
+
+    SDL_SetMainReady();
+    [self performSelector:@selector(postFinishLaunch) withObject:nil afterDelay:0.0];
+}
+
+- (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions
+{
+    NSBundle *bundle = [NSBundle mainBundle];
 
     /* Set working directory to resource path */
     [[NSFileManager defaultManager] changeCurrentDirectoryPath:[bundle resourcePath]];
@@ -469,10 +502,20 @@ static UIImage *SDL_LoadLaunchImageNamed(NSString *name, int screenh)
     SDL_AddHintCallback(SDL_HINT_IDLE_TIMER_DISABLED,
                         SDL_IdleTimerDisabledChanged, NULL);
 
-    SDL_SetMainReady();
-    [self performSelector:@selector(postFinishLaunch) withObject:nil afterDelay:0.0];
+    if (@available(iOS 13.0, tvOS 13.0, *)) {
+        return YES;
+    }
+
+    [self startWithScene:nil];
 
     return YES;
+}
+
+- (UISceneConfiguration *)application:(UIApplication *)application configurationForConnectingSceneSession:(UISceneSession *)connectingSceneSession options:(UISceneConnectionOptions *)options API_AVAILABLE(ios(13.0), tvos(13.0))
+{
+    UISceneConfiguration *config = [[UISceneConfiguration alloc] initWithName:@"SDLSceneConfiguration" sessionRole:connectingSceneSession.role];
+    config.delegateClass = [SDLUIKitSceneDelegate class];
+    return config;
 }
 
 - (UIWindow *)window
@@ -523,6 +566,74 @@ static UIImage *SDL_LoadLaunchImageNamed(NSString *name, int screenh)
     return YES;
 }
 
+#endif
+
+@end
+
+API_AVAILABLE(ios(13.0), tvos(13.0))
+@implementation SDLUIKitSceneDelegate
+
+- (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)session options:(UISceneConnectionOptions *)connectionOptions
+{
+    if (![scene isKindOfClass:[UIWindowScene class]]) {
+        return;
+    }
+
+    [(SDLUIKitDelegate *)[SDLUIKitDelegate sharedAppDelegate] startWithScene:scene];
+
+    for (UIOpenURLContext *context in connectionOptions.URLContexts) {
+        [self openURLContext:context];
+    }
+
+    for (NSUserActivity *activity in connectionOptions.userActivities) {
+        [self scene:scene continueUserActivity:activity];
+    }
+}
+
+- (void)openURLContext:(UIOpenURLContext *)context
+{
+    UIApplication *application = [UIApplication sharedApplication];
+    id<UIApplicationDelegate> delegate = application.delegate;
+
+    if ([delegate respondsToSelector:@selector(application:openURL:options:)]) {
+        NSMutableDictionary<UIApplicationOpenURLOptionsKey, id> *options = [NSMutableDictionary dictionary];
+        if (context.options.sourceApplication) {
+            options[UIApplicationOpenURLOptionsSourceApplicationKey] = context.options.sourceApplication;
+        }
+        if (context.options.annotation) {
+            options[UIApplicationOpenURLOptionsAnnotationKey] = context.options.annotation;
+        }
+        options[UIApplicationOpenURLOptionsOpenInPlaceKey] = @(context.options.openInPlace);
+        [delegate application:application openURL:context.URL options:options];
+    }
+}
+
+- (void)scene:(UIScene *)scene openURLContexts:(NSSet<UIOpenURLContext *> *)URLContexts
+{
+    for (UIOpenURLContext *context in URLContexts) {
+        [self openURLContext:context];
+    }
+}
+
+- (void)scene:(UIScene *)scene continueUserActivity:(NSUserActivity *)userActivity
+{
+    UIApplication *application = [UIApplication sharedApplication];
+    id<UIApplicationDelegate> delegate = application.delegate;
+
+    if ([delegate respondsToSelector:@selector(application:continueUserActivity:restorationHandler:)]) {
+        [delegate application:application continueUserActivity:userActivity restorationHandler:^(NSArray<id<UIUserActivityRestoring>> *restorableObjects) {}];
+    }
+}
+
+#if !TARGET_OS_TV && __IPHONE_OS_VERSION_MAX_ALLOWED >= 270000
+- (void)windowScene:(UIWindowScene *)windowScene didUpdateEffectiveGeometry:(UIWindowSceneGeometry *)previousEffectiveGeometry API_AVAILABLE(ios(26.0))
+{
+    if (@available(iOS 27.0, *)) {
+        if (windowScene.effectiveGeometry.interfaceOrientation != previousEffectiveGeometry.interfaceOrientation) {
+            SDL_OnApplicationDidChangeStatusBarOrientation();
+        }
+    }
+}
 #endif
 
 @end

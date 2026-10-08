@@ -205,9 +205,21 @@ int UIKit_CreateWindow(_THIS, SDL_Window *window)
         }
 #endif /* !TARGET_OS_TV */
 
-        /* ignore the size user requested, and make a fullscreen window */
-        /* !!! FIXME: can we have a smaller view? */
-        uiwindow = [[SDL_uikitwindow alloc] initWithFrame:data.uiscreen.bounds];
+        uiwindow = nil;
+        if (data.uiscreen == [UIScreen mainScreen]) {
+            if (@available(iOS 13.0, tvOS 13.0, *)) {
+                UIWindowScene *scene = UIKit_GetActiveWindowScene();
+                if (scene) {
+                    uiwindow = [[SDL_uikitwindow alloc] initWithWindowScene:scene];
+                }
+            }
+        }
+
+        if (!uiwindow) {
+            /* ignore the size user requested, and make a fullscreen window */
+            /* !!! FIXME: can we have a smaller view? */
+            uiwindow = [[SDL_uikitwindow alloc] initWithFrame:data.uiscreen.bounds];
+        }
 
         /* put the window on an external display if appropriate. */
         if (data.uiscreen != [UIScreen mainScreen]) {

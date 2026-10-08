@@ -29,6 +29,13 @@
 
 @end
 
+API_AVAILABLE(ios(13.0), tvos(13.0))
+@interface SDLUIKitSceneDelegate : UIResponder<UIWindowSceneDelegate>
+
+@property (strong, nonatomic) UIWindow *window;
+
+@end
+
 @interface SDLUIKitDelegate : NSObject<UIApplicationDelegate>
 
 + (id)sharedAppDelegate;
